@@ -4,12 +4,12 @@ DATASET="d9_ecoli_r1041"
 SIGNALS="../../../data/${DATASET}/nonsplit_pod5_files/"
 READS="../../../data/${DATASET}/reads_dorado.fasta"
 REF="../../../data/${DATASET}/ref.fa"
-PRESET="ava"
+PRESET="r10ava"
 PORE="../../../../extern/local_kmer_models/uncalled_r1041_model_only_means.txt"
 
 OUTDIR="rawsamble"
 THREAD=$1 #64
-PARAMS="--r10"
+PARAMS=""
 
 mkdir -p ${OUTDIR}
 

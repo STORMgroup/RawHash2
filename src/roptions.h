@@ -49,6 +49,7 @@ extern "C" {
 // indexing and mapping options
 typedef struct ri_idxopt_s{
 	short b, w, e, n, q, k, flag, lev_col;
+	int n_buckets;  /* number of distinct quantization buckets; q is derived as ceil(log2(n_buckets)) */
 	int64_t mini_batch_size;
 	uint64_t batch_size;
 

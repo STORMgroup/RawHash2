@@ -5,8 +5,8 @@
 #include "roptions.h"
 #include "rsig.h"
 
-#define RI_IDX_MAGIC   "RI"
-#define RI_IDX_MAGIC_BYTE 2
+#define RI_IDX_MAGIC   "RI2"
+#define RI_IDX_MAGIC_BYTE 3
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +28,7 @@ typedef struct ri_idx_seq_s{
 
 typedef struct ri_idx_s{
 	int32_t b, w, e, n, q, k, flag;
+	int32_t n_buckets;  /* explicit bucket count; q is derived as ceil(log2(n_buckets)) */
 	int32_t index;
 	int diff;
 	float fine_min, fine_max, fine_range;
@@ -125,7 +126,7 @@ int64_t ri_idx_is_idx(const char* fn);
  * 
  * @return		rindex (index)
  */
-ri_idx_t* ri_idx_init(int diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, int flag);
+ri_idx_t* ri_idx_init(int diff, int b, int w, int e, int n, int q, int n_buckets, int k, float fine_min, float fine_max, float fine_range, int flag);
 
 /**
  * Reads or constructs the index from file. If the file is not index, it should be a file containing sequences to generate the index for.

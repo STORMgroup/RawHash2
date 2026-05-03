@@ -16,34 +16,49 @@ static inline uint64_t hash64(uint64_t key, uint64_t mask){
 }
 
 uint32_t dynamic_quantize(float signal,
-						  float fine_min,
-						  float fine_max,
-						  float fine_range,
-						  uint32_t n_buckets)
+                          float fine_min,
+                          float fine_max,
+                          float fine_range,
+                          uint32_t n_buckets)
 {
-    // Total range for normalization
-    float minVal = -3.0, maxVal = 3.0;
-    float range = maxVal - minVal;
-	float coarse_coef1 = (1-fine_range)/2;
-	float coarse_coef2 = fine_range + coarse_coef1;
+    if (n_buckets == 0) return 0;
 
-    float normalized = (signal - minVal) / range;
+    float nb_f = (float)n_buckets * fine_range + 0.5f;
+    int32_t n_fine_i = (int32_t)nb_f;
+    if (n_fine_i < 1) n_fine_i = 1;
+    if ((uint32_t)n_fine_i > n_buckets) n_fine_i = (int32_t)n_buckets;
+    uint32_t n_fine = (uint32_t)n_fine_i;
+    uint32_t n_low  = (n_buckets - n_fine) / 2;
+    uint32_t n_high = n_buckets - n_fine - n_low;
 
-	float a = (fine_min - minVal) / range;
-	float b = (fine_max - minVal) / range;
-
-    float quantized = fine_max;
-    if (signal >= fine_min && signal <= fine_max) {
-        quantized = fine_range * ((normalized - a) / (b - a));
+    float lo_in = -3.0f, hi_in = 3.0f;
+    if (signal < fine_min) {
+        if (n_low == 0) return 0;
+        float denom = fine_min - lo_in;
+        float t = (denom > 0.0f) ? (signal - lo_in) / denom : 0.0f;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        uint32_t b = (uint32_t)(t * n_low);
+        if (b >= n_low) b = n_low - 1;
+        return b;
+    } else if (signal <= fine_max) {
+        float denom = fine_max - fine_min;
+        float t = (denom > 0.0f) ? (signal - fine_min) / denom : 0.0f;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        uint32_t b = (uint32_t)(t * n_fine);
+        if (b >= n_fine) b = n_fine - 1;
+        return n_low + b;
+    } else {
+        if (n_high == 0) return n_buckets - 1;
+        float denom = hi_in - fine_max;
+        float t = (denom > 0.0f) ? (signal - fine_max) / denom : 1.0f;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        uint32_t b = (uint32_t)(t * n_high);
+        if (b >= n_high) b = n_high - 1;
+        return n_low + n_fine + b;
     }
-	else {
-        if (normalized < 0.5) quantized = fine_range + coarse_coef1 * normalized;
-        else quantized = coarse_coef2 + coarse_coef1 * normalized;
-    }
-
-    uint32_t quantizedValue = (uint32_t)(quantized * (n_buckets-1));
-
-    return quantizedValue;
 }
 
 void ri_sketch_min(void *km,
@@ -55,6 +70,7 @@ void ri_sketch_min(void *km,
 				   int w,
 				   int e,
 				   uint32_t quant_bit,
+				   uint32_t n_buckets,
 				   int k,
 				   float fine_min,
 				   float fine_max,
@@ -63,15 +79,14 @@ void ri_sketch_min(void *km,
 				   short out)
 {
 	assert(len > 0 && (w > 0 && w < 256) && e*quant_bit <= (64-RI_HASH_SHIFT));
-	
+	assert(n_buckets >= 1 && n_buckets <= (uint32_t)(1U<<quant_bit));
+
 	int j, buf_pos, min_pos;
 	mm128_t buf[256], min = { UINT64_MAX, UINT64_MAX };
 
 	uint32_t span = k+e-1;
-	
-	const uint64_t id_shift = (uint64_t)id<<RI_ID_SHIFT, mask = (1ULL<<32)-1, mask_events = (1ULL<<(quant_bit*e))-1, mask_quant_bit = (1ULL<<quant_bit)-1;
 
-	uint32_t n_buckets = 1UL<<quant_bit;
+	const uint64_t id_shift = (uint64_t)id<<RI_ID_SHIFT, mask = (1ULL<<32)-1, mask_events = (1ULL<<(quant_bit*e))-1, mask_quant_bit = (1ULL<<quant_bit)-1;
 
 	memset(buf, 0xff, w * 16);
 	rh_kv_resize(mm128_t, km, *p, p->n + len/w);
@@ -150,6 +165,7 @@ void ri_sketch_reg(void *km,
 				   int diff,
 				   int e,
 				   uint32_t quant_bit,
+				   uint32_t n_buckets,
 				   int k,
 				   float fine_min,
 				   float fine_max,
@@ -158,12 +174,11 @@ void ri_sketch_reg(void *km,
 				   short out){
 
 	assert(len > 0 && (uint32_t)e*quant_bit <= 64);
+	assert(n_buckets >= 1 && n_buckets <= (uint32_t)(1U<<quant_bit));
 
 	uint32_t span = k+e-1;
-	
-	const uint64_t id_shift = (uint64_t)id<<RI_ID_SHIFT, mask = (1ULL<<32)-1, mask_events = (1ULL<<(quant_bit*e))-1, mask_quant_bit = (1ULL<<quant_bit)-1;
 
-	uint32_t n_buckets = 1UL<<quant_bit;
+	const uint64_t id_shift = (uint64_t)id<<RI_ID_SHIFT, mask = (1ULL<<32)-1, mask_events = (1ULL<<(quant_bit*e))-1, mask_quant_bit = (1ULL<<quant_bit)-1;
 
 	int sigBufFull = 0;
 	uint32_t f_pos = 0, sigBufPos = 0, l_sigpos = 0; //last signal position
@@ -220,6 +235,7 @@ void ri_sketch_reg_rev(void *km,
 					   int diff,
 					   int e,
 					   uint32_t quant_bit,
+					   uint32_t n_buckets,
 					   int k,
 					   float fine_min,
 				   	   float fine_max,
@@ -228,11 +244,10 @@ void ri_sketch_reg_rev(void *km,
 					   short out)
 {
 	assert(len > 0 && (uint32_t)e*quant_bit <= 64-RI_HASH_SHIFT);
+	assert(n_buckets >= 1 && n_buckets <= (uint32_t)(1U<<quant_bit));
 
 	uint32_t span = k+e-1;
 	const uint64_t id_shift = (uint64_t)id<<RI_ID_SHIFT, mask = (1ULL<<32)-1, mask_events = (1ULL<<(quant_bit*e))-1, mask_quant_bit = (1ULL<<quant_bit)-1;
-
-	uint32_t n_buckets = 1UL<<quant_bit;
 
 	int sigBufFull = 0, streak = 1;
 	uint32_t f_pos = 0, r_pos = len-1, sigBufPos = 0, l_sigpos = 0; //last signal position
@@ -293,6 +308,7 @@ void ri_sketch(void *km,
                int e,
                int n,
                uint32_t quant_bit,
+               uint32_t n_buckets,
                int k,
                float fine_min,
                float fine_max,
@@ -300,8 +316,8 @@ void ri_sketch(void *km,
                mm128_v *p,
 			   short out)
 {
-	if(w) ri_sketch_min(km, s_values, id, strand, len, diff, w, e, quant_bit, k, fine_min, fine_max, fine_range, p, out);
-	else ri_sketch_reg(km, s_values, id, strand, len, diff, e, quant_bit, k, fine_min, fine_max, fine_range, p, out);
+	if(w) ri_sketch_min(km, s_values, id, strand, len, diff, w, e, quant_bit, n_buckets, k, fine_min, fine_max, fine_range, p, out);
+	else ri_sketch_reg(km, s_values, id, strand, len, diff, e, quant_bit, n_buckets, k, fine_min, fine_max, fine_range, p, out);
 }
 
 void ri_sketch_rev(void *km,
@@ -314,6 +330,7 @@ void ri_sketch_rev(void *km,
 				   int e,
 				   int n,
 				   uint32_t quant_bit,
+				   uint32_t n_buckets,
 				   int k,
 				   float fine_min,
                	   float fine_max,
@@ -322,5 +339,5 @@ void ri_sketch_rev(void *km,
 				   short out)
 {
 	// if(w) ri_sketch_min(km, s_values, id, strand, len, diff, w, e, q, lq, k, p, out);
-	ri_sketch_reg_rev(km, s_values, id, strand, len, diff, e, quant_bit, k, fine_min, fine_max, fine_range, p, out);
+	ri_sketch_reg_rev(km, s_values, id, strand, len, diff, e, quant_bit, n_buckets, k, fine_min, fine_max, fine_range, p, out);
 }

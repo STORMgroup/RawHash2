@@ -4,15 +4,16 @@
 void ri_idxopt_init(ri_idxopt_t *opt)
 {
 	memset(opt, 0, sizeof(ri_idxopt_t));
-	opt->e = 8; opt->w = 2; opt->q = 4; opt->n = 0; opt->k = 6, opt->lev_col = 1;
+	opt->e = 8; opt->w = 2; opt->q = 3; opt->n = 0; opt->k = 6, opt->lev_col = 1;
+	opt->n_buckets = 7;  /* 2^q by default; CLI may override with --n-buckets */
 	opt->b = 14;
 	opt->diff = 0; // quantized sig-diff: skip if |quant_diff| <= diff; -1 disables filtering
 	opt->mini_batch_size = 50000000;
 	opt->batch_size = 4000000000ULL;
 
-	opt->fine_min = -2.0f;
-	opt->fine_max = 2.0f;
-	opt->fine_range = 0.4;
+	opt->fine_min = -1.6f;
+	opt->fine_max = 1.6f;
+	opt->fine_range = 0.75f;
 
 	opt->window_length1 = 3; //--seg-window-length1
     opt->window_length2 = 9; //--seg-window-length2

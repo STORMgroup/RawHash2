@@ -10,7 +10,7 @@
 #include "rlive.h"
 #endif
 
-#define RH_VERSION "2.1"
+#define RH_VERSION "2.5"
 
 static ko_longopt_t long_options[] = {
 	{ (char*)"level_column",     	ko_required_argument, 	300 },
@@ -106,6 +106,7 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"skip-first-events",	ko_required_argument, 	388 },
 	{ (char*)"debug-read",			ko_required_argument, 	389 },
 	// removed: quant-sig-diff (390) — merged into --sig-diff
+	{ (char*)"n-buckets",			ko_required_argument,	391 },
 	{ 0, 0, 0 }
 };
 
@@ -133,6 +134,44 @@ static inline void yes_or_no(ri_mapopt_t *opt, int64_t flag, int long_idx, const
 	}
 }
 
+static void apply_r10_chemistry(ri_idxopt_t *io, ri_mapopt_t *mo)
+{
+	io->k = 9;
+
+	io->window_length1 = 3; io->window_length2 = 6;
+	io->threshold1 = 5.5f; io->threshold2 = 3.5f;
+	io->peak_height = 0.2f;
+
+	mo->window_length1 = 3; mo->window_length2 = 6;
+	mo->threshold1 = 5.5f; mo->threshold2 = 3.5f;
+	mo->peak_height = 0.2f;
+
+	mo->chain_gap_scale = 1.2f;
+
+	io->bp_per_sec = 400;
+	mo->bp_per_sec = 400;
+	io->sample_rate = 5000; io->sample_per_base = (float)io->sample_rate / io->bp_per_sec;
+	mo->sample_rate = 5000; mo->sample_per_base = (float)mo->sample_rate / mo->bp_per_sec;
+}
+
+static void apply_r10_sensitive_quant(ri_idxopt_t *io)
+{
+	io->n_buckets = 8;
+	io->q = 3;
+	io->fine_min = -2.0f;
+	io->fine_max = 2.0f;
+	io->fine_range = 0.75f;
+}
+
+static void apply_r10fast_quant(ri_idxopt_t *io)
+{
+	io->n_buckets = 12;
+	io->q = 4;
+	io->fine_min = -1.6f;
+	io->fine_max = 1.6f;
+	io->fine_range = 0.6f;
+}
+
 int ri_set_opt(const char *preset, ri_idxopt_t *io, ri_mapopt_t *mo)
 {
 	if (preset == 0) {
@@ -145,11 +184,38 @@ int ri_set_opt(const char *preset, ri_idxopt_t *io, ri_mapopt_t *mo)
 	} else if (strcmp(preset, "sensitive") == 0) {
 		//default
 	} else if (strcmp(preset, "fast") == 0) {
-		io->fine_range = 0.6;
+		io->n_buckets = 12;
+		io->q = 4;
+		io->fine_min = -1.5f;
+		io->fine_max = 1.5f;
+		io->fine_range = 0.6f;
 		mo->min_mapq = 5, mo->min_chaining_score = 10, mo->chain_gap_scale = 0.6f;
+	} else if (strcmp(preset, "r10") == 0) {
+		apply_r10_chemistry(io, mo);
+		apply_r10_sensitive_quant(io);
+	} else if (strcmp(preset, "r10fast") == 0) {
+		mo->min_mapq = 5;
+		mo->min_chaining_score = 10;
+		apply_r10_chemistry(io, mo);
+		apply_r10fast_quant(io);
+	} else if (strcmp(preset, "r10ava") == 0) {
+		ri_set_opt("ava", io, mo);
+		apply_r10_chemistry(io, mo);
+		apply_r10_sensitive_quant(io);
+	} else if (strcmp(preset, "r10ava-sensitive") == 0) {
+		ri_set_opt("ava-sensitive", io, mo);
+		apply_r10_chemistry(io, mo);
+		apply_r10_sensitive_quant(io);
+	} else if (strcmp(preset, "r10ava-viral") == 0) {
+		ri_set_opt("ava-viral", io, mo);
+		apply_r10_chemistry(io, mo);
+		apply_r10_sensitive_quant(io);
+	} else if (strcmp(preset, "r10ava-large") == 0) {
+		ri_set_opt("ava-large", io, mo);
+		apply_r10_chemistry(io, mo);
+		apply_r10_sensitive_quant(io);
 	} else if (strcmp(preset, "faster") == 0) {
 		io->e = 11; io->w = 3;
-		io->fine_range = 0.6;
 		mo->max_num_chunk = 5; mo->min_mapq = 5, mo->min_chaining_score = 10, mo->chain_gap_scale = 0.6f;
 	} else if (strcmp(preset, "ava-viral") == 0) {
 		io->e = 6;
@@ -209,7 +275,6 @@ int ri_set_opt(const char *preset, ri_idxopt_t *io, ri_mapopt_t *mo)
 
 		mo->pri_ratio = 0.0f;
 	} else if (strcmp(preset, "ava-large") == 0) {
-		io->fine_range = 0.6;
 		mo->chain_gap_scale = 0.6f;
 
 		io->w = 5;
@@ -302,18 +367,12 @@ int main(int argc, char *argv[])
 	ri_live_opt_init(&live_opt);
 #endif
 
-	// first pass: apply presets (-x) and context-dependent defaults (--moves-file, --peaks-file)
 	while ((c = ketopt(&o, argc, argv, 1, opt_str, long_options)) >= 0) {
 		if (c == 'x') {
 			if (ri_set_opt(o.arg, &ipt, &opt) < 0) {
 				fprintf(stderr, "[ERROR] unknown preset '%s'\n", o.arg);
 				return 1;
 			}
-		} else if (c == 374) { // --moves-file: auto-set defaults (user can override in second pass)
-			opt.skip_first_events = 1;
-			ipt.diff = -1; // disable sig-diff filtering: move tables give best accuracy without it
-		} else if (c == 372) { // --peaks-file: auto-set defaults (user can override in second pass)
-			ipt.diff = -1; // disable sig-diff filtering: peaks give 1:1 event-to-base
 		} else if (c == ':') {
 			fprintf(stderr, "[ERROR] missing option argument\n");
 			return 1;
@@ -325,11 +384,24 @@ int main(int argc, char *argv[])
 	o = KETOPT_INIT;
 
 	while ((c = ketopt(&o, argc, argv, 1, opt_str, long_options)) >= 0) {
+		if (c == 363) { // --r10: backward-compat alias for `-x r10`
+			ri_set_opt("r10", &ipt, &opt);
+		} else if (c == 374) { // --moves-file: auto-set defaults (user can override in second pass)
+			opt.skip_first_events = 1;
+			ipt.diff = -1; // disable sig-diff filtering: move tables give best accuracy without it
+		} else if (c == 372) { // --peaks-file: auto-set defaults (user can override in second pass)
+			ipt.diff = -1; // disable sig-diff filtering: peaks give 1:1 event-to-base
+		}
+	}
+	o = KETOPT_INIT;
+
+	int q_set_by_user = 0, n_buckets_set_by_user = 0;
+	while ((c = ketopt(&o, argc, argv, 1, opt_str, long_options)) >= 0) {
 		if (c == 'd') fnw = o.arg;
 		else if (c == 'p') fpore = o.arg;
 		else if (c == 'k') ipt.k = atoi(o.arg);
 		else if (c == 'e') ipt.e = atoi(o.arg);
-		else if (c == 'q') ipt.q = atoi(o.arg);
+		else if (c == 'q') { ipt.q = atoi(o.arg); q_set_by_user = 1; }
 		else if (c == 'w') ipt.w = atoi(o.arg);
 		else if (c == 'n') ipt.n = atoi(o.arg);
 		else if (c == 't') n_threads = atoi(o.arg);
@@ -430,27 +502,6 @@ int main(int argc, char *argv[])
 		else if (c == 360) opt.rev_col_limit = atoi(o.arg); // --rev-collision-count
 		else if (c == 361) opt.chn_rev_bump = atof(o.arg); // --chn-rev-bump
 		// else if (c == 362) {ipt.flag |= RI_I_REV_QUERY;}// --rev-query
-		else if (c == 363) { // --r10
-			ipt.k = 9;
-
-			ipt.window_length1 = 3; ipt.window_length2 = 6;
-			ipt.threshold1 = 5.5f; ipt.threshold2 = 3.5f;
-			ipt.peak_height = 0.2f;
-
-			opt.window_length1 = 3; opt.window_length2 = 6;
-			opt.threshold1 = 5.5f; opt.threshold2 = 3.5f;
-			opt.peak_height = 0.2f;
-
-			opt.chain_gap_scale = 1.2f;
-
-			opt.bp_per_sec = 400;
-			ipt.bp_per_sec = 400;
-			opt.sample_rate = 5000; opt.sample_per_base = (float)opt.sample_rate / opt.bp_per_sec;
-			ipt.sample_rate = 5000; ipt.sample_per_base = (float)ipt.sample_rate / ipt.bp_per_sec;
-
-			// io->fine_range = 0.6;
-			// mo->min_mapq = 5, mo->min_chaining_score = 10, mo->chain_gap_scale = 0.6f;
-		}
 		else if (c == 364) {ipt.fine_min = atof(o.arg);}// --fine-min
 		else if (c == 365) {ipt.fine_max = atof(o.arg);}// --fine-max
 		else if (c == 366) {ipt.fine_range = atof(o.arg);}// --fine-range
@@ -480,7 +531,35 @@ int main(int argc, char *argv[])
 		else if (c == 388) opt.skip_first_events = (uint32_t)atoi(o.arg); // --skip-first-events
 		else if (c == 389) opt.debug_read = o.arg; // --debug-read
 		// removed: case 390 (quant-sig-diff) — merged into --sig-diff (case 347)
+		else if (c == 391) { ipt.n_buckets = atoi(o.arg); n_buckets_set_by_user = 1; } // --n-buckets
 		else if (c == 'V') {puts(RH_VERSION); return 0;}
+	}
+
+	/* Reconcile -q (bits) and --n-buckets (count). They cannot both be user-set. */
+	if (q_set_by_user && n_buckets_set_by_user) {
+		fprintf(stderr, "[ERROR] -q and --n-buckets are mutually exclusive: pick one (or neither, in which case the default n_buckets=%d is used).\n", ipt.n_buckets);
+		return 1;
+	}
+	if (n_buckets_set_by_user) {
+		if (ipt.n_buckets < 2 || ipt.n_buckets > (1<<7)) {
+			fprintf(stderr, "[ERROR] --n-buckets must be in [2, %d]; got %d.\n", 1<<7, ipt.n_buckets);
+			return 1;
+		}
+		/* Derive q = ceil(log2(n_buckets)). */
+		int q = 0;
+		while ((1 << q) < ipt.n_buckets) ++q;
+		ipt.q = q;
+	} else if (q_set_by_user) {
+		if (ipt.q < 1 || ipt.q > 7) {
+			fprintf(stderr, "[ERROR] -q must be in [1, 7]; got %d.\n", ipt.q);
+			return 1;
+		}
+		ipt.n_buckets = 1 << ipt.q;
+	}
+	/* Hash-budget constraint: e * q must fit in (64 - RI_HASH_SHIFT) = 58 bits. */
+	if (ipt.e * ipt.q > 64 - 6) {
+		fprintf(stderr, "[ERROR] e * q exceeds the hash budget (64 - RI_HASH_SHIFT = 58): e=%d, q=%d, product=%d.\n", ipt.e, ipt.q, ipt.e * ipt.q);
+		return 1;
 	}
 
 	if ((fpeaks != 0) + (fevents != 0) + (fmoves != 0) > 1) {
@@ -504,7 +583,8 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "\n  Indexing:\n");
 		fprintf(fp_help, "    -d FILE      dump index to FILE (strongly recommended before mapping) []\n");
 		fprintf(fp_help, "    -e INT       events per hash value [%d]. Also applies during mapping\n", ipt.e);
-		fprintf(fp_help, "    -q INT       quantization bits [%d]. Creates 2^INT buckets\n", ipt.q);
+		fprintf(fp_help, "    -q INT       quantization bits [%d]. Creates 2^INT buckets. Mutually exclusive with --n-buckets.\n", ipt.q);
+		fprintf(fp_help, "    --n-buckets INT   number of distinct quantization buckets [%d]. q is derived as ceil(log2(N)). Mutually exclusive with -q.\n", ipt.n_buckets);
 		fprintf(fp_help, "    -w INT       minimizer window size [%d]. >0 enables minimizer seeding (faster, less accurate)\n", ipt.w);
 		fprintf(fp_help, "    --sig-diff INT     skip events if quantized difference <= INT [%d]. -1 disables filtering (auto-set to -1 with --moves-file/--peaks-file)\n", ipt.diff);
 		fprintf(fp_help, "    --store-sig  store reference signal in index (required for DTW alignment)\n");
@@ -609,13 +689,19 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "        sensitive   small genomes (<500M, default accuracy)\n");
 		fprintf(fp_help, "        fast        large genomes (500M-5G, faster)\n");
 		fprintf(fp_help, "        faster      very large genomes (>5G, uses minimizers)\n");
+		fprintf(fp_help, "        r10         R10.x chemistry, sensitive shape (equivalent to -x sensitive --r10)\n");
+		fprintf(fp_help, "        r10fast     R10.x chemistry, fast shape (tuned for human R10 references)\n");
 		fprintf(fp_help, "      Rawsamble (overlapping) presets:\n");
 		fprintf(fp_help, "        ava            all-vs-all overlapping (default for Rawsamble)\n");
 		fprintf(fp_help, "        ava-sensitive  more sensitive overlapping\n");
 		fprintf(fp_help, "        ava-viral      overlapping for viral genomes\n");
 		fprintf(fp_help, "        ava-large      overlapping for large genomes (>10G)\n");
+		fprintf(fp_help, "        r10ava            R10.x chemistry, ava shape\n");
+		fprintf(fp_help, "        r10ava-sensitive  R10.x chemistry, ava-sensitive shape\n");
+		fprintf(fp_help, "        r10ava-viral      R10.x chemistry, ava-viral shape\n");
+		fprintf(fp_help, "        r10ava-large      R10.x chemistry, ava-large shape\n");
 		fprintf(fp_help, "    --depletion  high-precision mode for contamination/abundance analysis\n");
-		fprintf(fp_help, "    --r10        R10.4.1 device and segmentation parameters\n");
+		fprintf(fp_help, "    --r10        backward-compat alias for `-x r10`\n");
 
 		fprintf(fp_help, "\n  Debug/Logging:\n");
 		fprintf(fp_help, "    --out-quantize              output quantized signal values (no mapping performed)\n");

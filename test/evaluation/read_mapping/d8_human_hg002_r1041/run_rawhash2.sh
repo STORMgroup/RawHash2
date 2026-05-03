@@ -7,9 +7,9 @@ OUTDIR="./rawhash2/"
 SIGNALS="../../../data/d8_human_hg002_r1041/pod5_files/"
 REF="../../../data/d8_human_hg002_r1041/ref.fa"
 PORE="../../../../extern/local_kmer_models/uncalled_r1041_model_only_means.txt"
-PRESET="fast"
+PRESET="r10fast"
 mkdir -p ${OUTDIR}
-PARAMS="--r10"
+PARAMS=""
 
 #The following is the run using default parameters:
 PREFIX="d8_human_hg002_r1041"

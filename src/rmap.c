@@ -359,7 +359,7 @@ void ri_map_frag(const ri_idx_t *ri,
 
 	//Sketching
 	mm128_v riv = {0,0,0};
-	ri_sketch(b->km, events, 0, 0, n_events, ri->diff, ri->w, ri->e, ri->n, ri->q, ri->k, ri->fine_min, ri->fine_max, ri->fine_range, &riv, 0);
+	ri_sketch(b->km, events, 0, 0, n_events, ri->diff, ri->w, ri->e, ri->n, ri->q, ri->n_buckets, ri->k, ri->fine_min, ri->fine_max, ri->fine_range, &riv, 0);
 
 	// if(ri->flag&RI_I_REV_QUERY){
 	// 	uint32_t span = ri->k+ri->e-1;
