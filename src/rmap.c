@@ -788,7 +788,10 @@ static void map_worker_for(void *_data,
 						   int tid) // kt_for() callback
 {
     step_mt *s = (step_mt*)_data; //s->sig and s->n_sig (signals read in this step and num of them)
-	const ri_mapopt_t *opt = s->p->opt;
+	/* When indexed batch loading is active, step 0 has built per-batch khashes
+	 * and stashed a shallow-copy opt with ext_peaks/events overridden onto s->batch_opt.
+	 * Otherwise we use the pipeline-shared opt (legacy full-load or no ext data). */
+	const ri_mapopt_t *opt = (s->batch_ext_peaks || s->batch_ext_events) ? &s->batch_opt : s->p->opt;
 	ri_tbuf_t* b = s->buf[tid];
 	ri_reg1_t* reg0 = s->reg[i];
 	reg0->prev_anchors = NULL, reg0->creg = NULL, reg0->events = NULL;
@@ -892,7 +895,7 @@ ri_sig_t** ri_sig_read_frag(pipeline_mt *pl,
 		
 		ri_sig_t *s = (ri_sig_t*)calloc(1, sizeof(ri_sig_t));
 		rh_kv_push(ri_sig_t*, 0, rsigv, s);
-		ri_read_sig(pl->fp, s, 1, (pl->opt->ext_peaks || pl->opt->ext_events) ? 1 : 0);
+		ri_read_sig(pl->fp, s, 1, (pl->opt->ext_peaks || pl->opt->ext_events || pl->opt->ext_peaks_index || pl->opt->ext_events_index) ? 1 : 0);
 		size += s->l_sig;
 
 		if(size >= chunk_size) break;
@@ -939,6 +942,23 @@ static void *map_worker_pipeline(void *shared,
 			s->reg = (ri_reg1_t**)calloc(s->n_sig, sizeof(ri_reg1_t*));
 			for(i = 0; i < s->n_sig; ++i)
 				s->reg[i] = (ri_reg1_t*)calloc(1, sizeof(ri_reg1_t));
+
+			/* Indexed batch loading: collect this batch's read_ids and load only their
+			 * external peaks/events from disk. The per-batch khashes are freed in step 2. */
+			if (p->opt->ext_peaks_index || p->opt->ext_events_index) {
+				char **rids = (char**)malloc(s->n_sig * sizeof(char*));
+				for (i = 0; i < s->n_sig; i++) rids[i] = s->sig[i] ? s->sig[i]->name : NULL;
+				if (p->opt->ext_peaks_index)
+					s->batch_ext_peaks  = ri_batch_load_ext_peaks (p->opt->ext_peaks_index,  rids, s->n_sig);
+				if (p->opt->ext_events_index)
+					s->batch_ext_events = ri_batch_load_ext_events(p->opt->ext_events_index, rids, s->n_sig);
+				free(rids);
+				/* Build the shallow-copy opt with ext_peaks/events pointing at the batch caches. */
+				s->batch_opt = *p->opt;
+				s->batch_opt.ext_peaks  = s->batch_ext_peaks;
+				s->batch_opt.ext_events = s->batch_ext_events;
+			}
+
 			return s;
 		} else if(s){
 			if(s->sig) {free(s->sig); s->sig = NULL;}
@@ -1037,6 +1057,10 @@ static void *map_worker_pipeline(void *shared,
 		for (i = 0; i < p->n_threads; ++i) ri_tbuf_destroy(s->buf[i]);
 		if(s->buf){free(s->buf); s->buf = NULL;}
 		if(s->reg){free(s->reg); s->reg = NULL;}
+
+		/* Free per-batch external segmentation caches (from step 0). */
+		if (s->batch_ext_peaks)  { ri_destroy_ext_peaks (s->batch_ext_peaks);  s->batch_ext_peaks  = NULL; }
+		if (s->batch_ext_events) { ri_destroy_ext_events(s->batch_ext_events); s->batch_ext_events = NULL; }
 
 		for(int i = 0; i < s->n_sig; ++i){
 			ri_sig_t *curS = s->sig[i];

@@ -225,7 +225,7 @@ bin/rawhash2 --live \
   --live-host sequencer01 --live-port 8004 \
   --live-tls --live-tls-cert /opt/ont/minknow/conf/rpc-certs/ca.crt \
   --live-last-channel 512 \
-  -x fast --r10 -t 16 ref.idx > live.paf
+  -x r10fast -t 16 ref.idx > live.paf
 ```
 
 For the complete guide covering all three modes, installation, configuration, validation, threading architecture, and troubleshooting, see **[live/LIVE.md](live/LIVE.md)**.
@@ -248,11 +248,13 @@ rawhash2 -d ref.ind \
   -p extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model \
   -t 32 ref.fasta
 
-# R10.4.1 indexing (different pore model + --r10 flag)
+# R10.4.1 indexing (different pore model; pick the chemistry preset)
 rawhash2 -d ref.ind \
   -p extern/local_kmer_models/uncalled_r1041_model_only_means.txt \
-  --r10 -t 32 ref.fasta
+  -x r10 -t 32 ref.fasta
 ```
+
+> **Note on R10 chemistry:** Use `-x r10` for non-human R10 references and `-x r10fast` for human R10 references (these subsume the chemistry knobs that the legacy `--r10` flag set on top of mapping presets — see [Mapping](#mapping) below). The `--r10` flag is still accepted as a backward-compat alias for `-x r10`.
 
 ## Mapping
 
@@ -260,14 +262,23 @@ Inputs can be directories of signal files (FAST5, POD5, SLOW5, BLOW5), individua
 
 **Mapping presets:**
 
+R9.4 mapping presets (use the R9.4 pore model):
+
 | Preset | Use case | Flag |
 |--------|----------|------|
 | `viral` | Viral genomes | `-x viral` |
 | `sensitive` | Small-medium genomes (<500M) | `-x sensitive` |
-| `fast` | Large genomes (>500M) | `-x fast` |
-| `faster` | Very large metagenomes (>10G), uses minimizer seeding (~3x faster) | `-x faster` |
+| `fast` | Large genomes (500M-5G) | `-x fast` |
+| `faster` | Very large metagenomes (>10G), uses minimizer seeding | `-x faster` |
 
-> **R10.4.1 data:** Add `--r10` to any preset. Use the R10 pore model for indexing (see [Indexing](#indexing)).
+R10.x mapping presets (use the R10 pore model). These bundle the chemistry knobs (k-mer size, segmentation thresholds, sample rate, etc.) with a sensitive- or fast-shape quantization tuned for the typical reference size in each case, so you do not need to pass `--r10` separately.
+
+| Preset | Use case | Flag |
+|--------|----------|------|
+| `r10`     | R10 chemistry, sensitive-shape quantization (non-human R10 references) | `-x r10`     |
+| `r10fast` | R10 chemistry, fast-shape quantization tuned for human R10 references  | `-x r10fast` |
+
+> **Backward compatibility:** the `--r10` flag is preserved as an alias for `-x r10`. Note that `-x fast --r10` now resolves to `-x r10` (sensitive shape) — for the d8-style human-R10 settings use `-x r10fast` explicitly.
 
 **Examples:**
 
@@ -275,8 +286,11 @@ Inputs can be directories of signal files (FAST5, POD5, SLOW5, BLOW5), individua
 # R9.4, viral preset
 rawhash2 -t 32 -x viral ref.ind test/data/d1_sars-cov-2_r94/fast5_files > mapping.paf
 
-# R10.4.1, sensitive preset
-rawhash2 -t 32 -x sensitive --r10 ref.ind test/data/d6_ecoli_r104/fast5_files > mapping.paf
+# R10.4 / R10.4.1 non-human (e.g., d6, d7, d9, d10): -x r10
+rawhash2 -t 32 -x r10 ref.ind test/data/d6_ecoli_r104/fast5_files > mapping.paf
+
+# R10.4.1 human (e.g., d8): -x r10fast
+rawhash2 -t 32 -x r10fast ref.ind test/data/d8_human_hg002_r1041/pod5_files > mapping.paf
 ```
 
 The output is in a modified PAF format used by [Uncalled](https://github.com/skovaka/UNCALLED).
@@ -287,7 +301,12 @@ RawHash2 provides several key functionalities beyond basic read mapping. This se
 
 ## R10.4.1 Support
 
-RawHash2 supports R10.4.1 (and R10 in general) nanopore data. R10 uses 9-mer pore models (vs 6-mer for R9.4) and different device parameters (e.g., different sampling rate). Use the `--r10` flag along with the appropriate pore model. See the [Indexing](#indexing) and [Mapping](#mapping) sections for R10.4.1 examples.
+RawHash2 supports R10.4.1 (and R10 in general) nanopore data. R10 uses 9-mer pore models (vs 6-mer for R9.4) and different device parameters (e.g., different sampling rate). Pick the right preset for your reference, and pair it with the R10 pore model:
+
+- `-x r10` — R10 chemistry, sensitive-shape quantization. Use for non-human R10 references (e.g., bacterial, fungal, small eukaryotic).
+- `-x r10fast` — R10 chemistry, fast-shape quantization tuned for human R10 references.
+
+Both presets imply the chemistry settings; you do not need to also pass `--r10`. The legacy `--r10` flag is still accepted as a backward-compat alias for `-x r10`. See the [Indexing](#indexing) and [Mapping](#mapping) sections for examples.
 
 ## Signal Alignment (RawAlign)
 
@@ -329,7 +348,7 @@ test/scripts/extract_moves_from_bam.sh reads_dorado.bam > moves.tsv
 rawhash2 --moves-file moves.tsv -p pore_model.txt -d ref.ind ref.fasta pod5_files/
 ```
 
-The `--min-seg-length` and `--max-seg-length` parameters control the minimum and maximum allowed segment lengths (in samples), regardless of which segmentation method is used. You may also consider setting `--sig-diff 0`, which is a heuristic that performs homopolymer compression to mitigate the oversegmentation issue in t-test. Similar strategy is used in Sigmap and Sigmoni tools as well.
+The `--min-seg-length` and `--max-seg-length` parameters control the minimum and maximum allowed segment lengths (in samples), regardless of which segmentation method is used. The `--sig-diff INT` parameter performs homopolymer compression on quantized event values: consecutive events whose quantized bucket indices differ by at most INT are skipped. The default is `--sig-diff 0` (skip only exact same-bucket events). Pass `--sig-diff -1` to disable the filter entirely (auto-set to `-1` when `--moves-file` or `--peaks-file` is used). A similar homopolymer-compression strategy is used in Sigmap and Sigmoni.
 
 ## Sequence Until (Real-Time Abundance Estimation)
 
@@ -368,12 +387,25 @@ rawhash2 -x ava -t 32 ava.ind test/data/d3_yeast_r94/fast5_files/ > ava.paf
 
 **Rawsamble presets:**
 
+R9.4 overlap presets (use the R9.4 pore model):
+
 | Preset | Use case |
 |--------|----------|
 | `ava` | All-vs-all overlapping (default) |
 | `ava-sensitive` | More sensitive; may produce longer unitigs in downstream assembly |
 | `ava-viral` | Very small genomes (e.g., viral) |
 | `ava-large` | Large genomes (>10Gb) |
+
+R10.x overlap presets (use the R10 pore model). Same shape as the R9.4 family above, with R10 chemistry and an R10-tuned quantizer baked in:
+
+| Preset | Use case |
+|--------|----------|
+| `r10ava`           | All-vs-all R10 overlapping |
+| `r10ava-sensitive` | More sensitive R10 overlapping |
+| `r10ava-viral`     | Very small R10 genomes |
+| `r10ava-large`     | Large R10 genomes (>10Gb) |
+
+The legacy form `-x ava --r10` still works and resolves to `-x r10ava`.
 
 ## Potential issues you may encounter during mapping
 

@@ -66,9 +66,10 @@ def main():
 
             rf = tags.get("rf", "na")
 
-            # mt:f: = mapping time (ms), nc:i: = number of chunks
+            # mt:f: = mapping time (ms), ci:i: = chunk index where mapping decision was made
+            # (this is the actual number of chunks processed; nc:i: is n_cregs, not chunk count)
             mt = tags.get("mt")
-            nc = tags.get("nc")
+            nc = tags.get("ci")
 
             if rf != "na":
                 if mt is not None:

@@ -148,9 +148,26 @@ typedef struct ri_mapopt_s{
 	uint32_t max_segment_length;  // maximum segment length (skip longer segments, default 500)
 	uint32_t skip_first_events;   // number of leading events to skip (default 0; auto-set to 1 with --moves-file)
 
-	//External segmentation data (NULL = use internal event detection)
-	void *ext_peaks;	// ri_ext_peaks_t* (opaque handle, loaded from --peaks-file)
-	void *ext_events;	// ri_ext_events_t* (opaque handle, loaded from --events-file)
+	//External segmentation data (NULL = use internal event detection).
+	//
+	//Two paths exist for external data:
+	//  (a) Full upfront load (legacy): main.c calls ri_load_ext_peaks/moves/events,
+	//      stores the resulting full hash on ext_peaks/ext_events. The mapping pipeline
+	//      reads ext_peaks/ext_events directly. Memory cost = full file in RAM.
+	//
+	//  (b) Indexed batch loading (low-memory): main.c calls ri_index_ext_peaks/moves/events
+	//      and stores the offset index on ext_peaks_index/ext_events_index. ext_peaks/
+	//      ext_events stay NULL on the pipeline-shared opt. The mapping pipeline's step 0
+	//      builds a per-batch small khash via ri_batch_load_ext_peaks/events, stashes it
+	//      on step_mt::batch_ext_peaks/events, and uses step_mt::batch_opt (a shallow copy
+	//      of this struct with ext_peaks/events overridden) for per-read lookups. Memory
+	//      cost = offset index (~92 B/read) + one batch's worth of data, freed each batch.
+	//
+	//Only ONE path should be active per --peaks-file/--moves-file/--events-file argument.
+	void *ext_peaks;	// ri_ext_peaks_t* (full hash; NULL when using indexed batch path)
+	void *ext_events;	// ri_ext_events_t* (full hash; NULL when using indexed batch path)
+	void *ext_peaks_index;	// ri_ext_peaks_index_t* (offset index; NULL when using full-load path)
+	void *ext_events_index;	// ri_ext_events_index_t* (offset index; NULL when using full-load path)
 
 	//Debug output (NULL = disabled; set via --debug-read READID)
 	const char *debug_read;	// when non-NULL, print detailed diagnostics for this read

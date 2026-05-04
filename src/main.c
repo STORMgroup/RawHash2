@@ -90,6 +90,7 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"moves-file",			ko_required_argument, 	374 },
 	{ (char*)"min-seg-length",		ko_required_argument, 	375 },
 	{ (char*)"max-seg-length",		ko_required_argument, 	376 },
+	{ (char*)"no-index-ext-data",	ko_no_argument,       	392 },
 #ifndef NGRPCRH
 	{ (char*)"live",				ko_no_argument,       	377 },
 	{ (char*)"live-host",			ko_required_argument, 	378 },
@@ -352,6 +353,7 @@ int main(int argc, char *argv[])
 	int c, n_threads = 3, io_n_threads = 1;
 	// int n_parts;
 	char *fnw = 0, *fpore = 0, *fpeaks = 0, *fevents = 0, *fmoves = 0, *s;
+	int load_ext_data_full = 0; // --no-index-ext-data: 1 = legacy full upfront load; 0 = indexed batch loading (default)
 	FILE *fp_help = stderr;
 	ri_idx_reader_t *idx_rdr;
 	ri_idx_t *ri;
@@ -515,6 +517,7 @@ int main(int argc, char *argv[])
 		else if (c == 374) fmoves = o.arg; // --moves-file
 		else if (c == 375) opt.min_segment_length = (uint32_t)atoi(o.arg); // --min-seg-length
 		else if (c == 376) opt.max_segment_length = (uint32_t)atoi(o.arg); // --max-seg-length
+		else if (c == 392) load_ext_data_full = 1; // --no-index-ext-data: legacy full upfront load
 #ifndef NGRPCRH
 		else if (c == 377) live_mode = 1; // --live
 		else if (c == 378) live_opt.host = o.arg; // --live-host
@@ -652,6 +655,13 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "                        Format: read_id<TAB>mv:B:c,STRIDE,0,1,...<TAB>ts:i:OFFSET\n");
 		fprintf(fp_help, "                        Use test/scripts/extract_moves_from_bam.sh to generate this file.\n");
 		fprintf(fp_help, "    --skip-first-events INT  skip the first INT events [%u] (auto-set to 1 with --moves-file)\n", opt.skip_first_events);
+		fprintf(fp_help, "    --no-index-ext-data  load --peaks-file/--events-file/--moves-file fully into memory at startup\n");
+		fprintf(fp_help, "                         instead of building a per-read offset index. The default (no flag) scans\n");
+		fprintf(fp_help, "                         the file once to record (read_id -> byte offset) and loads only the reads\n");
+		fprintf(fp_help, "                         needed by the current pipeline batch via fseek+parse, freeing each batch\n");
+		fprintf(fp_help, "                         after use. Indexing keeps memory bounded for large external files; full\n");
+		fprintf(fp_help, "                         load avoids the per-batch fseek overhead but requires the entire parsed\n");
+		fprintf(fp_help, "                         dataset to fit in RAM. Both paths produce identical mapping output.\n");
 		fprintf(fp_help, "    Note: --peaks-file, --events-file, and --moves-file are mutually exclusive.\n");
 
 		fprintf(fp_help, "\n  Sequence Until (real-time abundance estimation):\n");
@@ -763,26 +773,49 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	/* External segmentation data.
+	 * Default path (load_ext_data_full == 0): build a lightweight offset index at startup
+	 *   (read_id -> byte offset only); the mapping pipeline loads only the per-batch subset
+	 *   from disk via fseek+parse. Bounded memory on huge files (~MB-scale offset hash + 1 batch
+	 *   resident at a time).
+	 * Legacy path (load_ext_data_full == 1, via --no-index-ext-data): load and parse the entire
+	 *   file into a full khash at startup. Faster steady-state mapping but requires the entire
+	 *   parsed dataset to fit in RAM. */
 	if (fpeaks) {
-		opt.ext_peaks = ri_load_ext_peaks(fpeaks);
-		if (!opt.ext_peaks) {
-			fprintf(stderr, "[ERROR] failed to load peaks file '%s'\n", fpeaks);
+		if (load_ext_data_full) {
+			opt.ext_peaks = ri_load_ext_peaks(fpeaks);
+		} else {
+			opt.ext_peaks_index = ri_index_ext_peaks(fpeaks);
+		}
+		if (!opt.ext_peaks && !opt.ext_peaks_index) {
+			fprintf(stderr, "[ERROR] failed to %s peaks file '%s'\n",
+				load_ext_data_full ? "load" : "index", fpeaks);
 			ri_idx_reader_close(idx_rdr);
 			return 1;
 		}
 	}
 	if (fevents) {
-		opt.ext_events = ri_load_ext_events(fevents);
-		if (!opt.ext_events) {
-			fprintf(stderr, "[ERROR] failed to load events file '%s'\n", fevents);
+		if (load_ext_data_full) {
+			opt.ext_events = ri_load_ext_events(fevents);
+		} else {
+			opt.ext_events_index = ri_index_ext_events(fevents);
+		}
+		if (!opt.ext_events && !opt.ext_events_index) {
+			fprintf(stderr, "[ERROR] failed to %s events file '%s'\n",
+				load_ext_data_full ? "load" : "index", fevents);
 			ri_idx_reader_close(idx_rdr);
 			return 1;
 		}
 	}
 	if (fmoves) {
-		opt.ext_peaks = ri_load_ext_moves(fmoves);
-		if (!opt.ext_peaks) {
-			fprintf(stderr, "[ERROR] failed to load moves file '%s'\n", fmoves);
+		if (load_ext_data_full) {
+			opt.ext_peaks = ri_load_ext_moves(fmoves);
+		} else {
+			opt.ext_peaks_index = ri_index_ext_moves(fmoves);
+		}
+		if (!opt.ext_peaks && !opt.ext_peaks_index) {
+			fprintf(stderr, "[ERROR] failed to %s moves file '%s'\n",
+				load_ext_data_full ? "load" : "index", fmoves);
 			ri_idx_reader_close(idx_rdr);
 			return 1;
 		}
@@ -821,8 +854,12 @@ int main(int argc, char *argv[])
 	ri_idx_reader_close(idx_rdr);
 	if(pore.pore_vals)free(pore.pore_vals);
 	if(pore.pore_inds)free(pore.pore_inds);
+	/* Free legacy full-load hashes (will be NULL when using indexed batch path) */
 	if(opt.ext_peaks) ri_destroy_ext_peaks(opt.ext_peaks);
 	if(opt.ext_events) ri_destroy_ext_events(opt.ext_events);
+	/* Free the offset indexes (which keep file handles open) */
+	if(opt.ext_peaks_index) ri_destroy_ext_peaks_index(opt.ext_peaks_index);
+	if(opt.ext_events_index) ri_destroy_ext_events_index(opt.ext_events_index);
 
 	if (fflush(stdout) == EOF) {
 		perror("[ERROR] failed to write the results");

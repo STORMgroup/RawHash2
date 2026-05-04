@@ -64,6 +64,15 @@ typedef struct step_ms{
 	// int* n_reg, *seg_off, *n_seg, *rep_len, *frag_gap;
 	ri_reg1_t** reg;
 	ri_tbuf_t** buf;
+	/* Per-batch external segmentation data, populated by step 0 when the
+	 * pipeline's options carry an ext_peaks_index / ext_events_index. The
+	 * batch_opt is a shallow copy of *p->opt with ext_peaks/ext_events
+	 * overridden to point at these per-batch caches, so map_worker_for can
+	 * read from &s->batch_opt instead of s->p->opt without any other code
+	 * changes. Both fields are NULL when batch loading isn't active. */
+	void *batch_ext_peaks;     /* ri_ext_peaks_t* (small khash, this batch only) */
+	void *batch_ext_events;    /* ri_ext_events_t* (small khash, this batch only) */
+	ri_mapopt_t batch_opt;     /* shallow copy of *p->opt; ext_peaks/events overridden */
 } step_mt;
 
 /**
