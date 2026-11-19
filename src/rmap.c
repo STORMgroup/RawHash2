@@ -281,7 +281,19 @@ void ri_map_frag(const ri_idx_t *ri,
 	const ri_ext_events_entry_t *ext_ev = ri_lookup_ext_events(opt->ext_events, qname);
 	const ri_ext_peaks_entry_t *ext_pk = ri_lookup_ext_peaks(opt->ext_peaks, qname);
 
-	if (ext_ev) {
+	if (ext_ev && reg->ext_chunked) {
+		const ri_ext_peaks_entry_t *pos = ri_lookup_ext_peaks(opt->ext_events_pos, qname);
+		uint32_t lo = 0, hi = ext_ev->n_events, a, z;
+		while (lo < hi) { uint32_t m = (lo + hi) >> 1; if (pos->peaks[m] <= reg->ext_s_qs) lo = m + 1; else hi = m; }
+		a = lo; hi = ext_ev->n_events;
+		while (lo < hi) { uint32_t m = (lo + hi) >> 1; if (pos->peaks[m] <= reg->ext_s_qe) lo = m + 1; else hi = m; }
+		z = lo;
+		n_events = z - a;
+		if (n_events > 0) {
+			events = (float*)ri_kmalloc(b->km, n_events * sizeof(float));
+			memcpy(events, ext_ev->events + a, n_events * sizeof(float));
+		}
+	} else if (ext_ev) {
 		/* External events: copy into km-allocated buffer, skip detect_events entirely */
 		n_events = ext_ev->n_events;
 		events = (float*)ri_kmalloc(b->km, n_events * sizeof(float));
@@ -804,8 +816,22 @@ static void map_worker_for(void *_data,
 	/* When external peaks or events are provided for this read, force
 	 * processing the entire signal in a single chunk so that external
 	 * indices/values correspond to the full read. */
-	int has_ext_data = (opt->ext_events && ri_lookup_ext_events(opt->ext_events, sig->name)) ||
+	const ri_ext_events_entry_t *ext_ev_e = opt->ext_events ? ri_lookup_ext_events(opt->ext_events, sig->name) : NULL;
+	int has_ext_data = (ext_ev_e != NULL) ||
 					   (opt->ext_peaks && ri_lookup_ext_peaks(opt->ext_peaks, sig->name));
+
+	reg0->ext_chunked = 0; reg0->ext_s_qs = reg0->ext_s_qe = 0;
+	if (ext_ev_e && opt->ext_events_pos) {
+		const ri_ext_peaks_entry_t *pos_e = ri_lookup_ext_peaks(opt->ext_events_pos, sig->name);
+		if (pos_e && pos_e->n_peaks == ext_ev_e->n_events && ext_ev_e->n_events > 0) {
+			reg0->ext_chunked = 1;
+			has_ext_data = 0;
+			if (pos_e->peaks[pos_e->n_peaks-1] > qlen) qlen = pos_e->peaks[pos_e->n_peaks-1];
+		} else if (pos_e) {
+			fprintf(stderr, "[W::%s] read %s: %u positions vs %u events; using single chunk\n",
+			        __func__, sig->name, pos_e->n_peaks, ext_ev_e->n_events);
+		}
+	}
 
 	uint32_t l_chunk = has_ext_data ? qlen :
 		((opt->chunk_size > qlen || (opt->flag&RI_M_NO_ADAPTIVE)) ? qlen : opt->chunk_size);
@@ -824,9 +850,11 @@ static void map_worker_for(void *_data,
 	for (s_qs = c_count = 0; s_qs < qlen && c_count < max_chunk; s_qs += l_chunk, ++c_count) {
 		s_qe = s_qs + l_chunk;
 		if(s_qe > qlen) s_qe = qlen;
+		reg0->ext_s_qs = s_qs; reg0->ext_s_qe = s_qe;
 
 		if (ri_map_one_chunk(s->p->ri, opt,
-		                     (const float*)&(sig->sig[s_qs]), (uint32_t)(s_qe - s_qs),
+		                     reg0->ext_chunked ? (const float*)sig->sig : (const float*)&(sig->sig[s_qs]),
+		                     reg0->ext_chunked ? 0u : (uint32_t)(s_qe - s_qs),
 		                     reg0, b, &mean_sum, &std_dev_sum, &n_events_sum,
 		                     sig->name)) {
 			break;
@@ -895,7 +923,7 @@ ri_sig_t** ri_sig_read_frag(pipeline_mt *pl,
 		
 		ri_sig_t *s = (ri_sig_t*)calloc(1, sizeof(ri_sig_t));
 		rh_kv_push(ri_sig_t*, 0, rsigv, s);
-		ri_read_sig(pl->fp, s, 1, (pl->opt->ext_peaks || pl->opt->ext_events || pl->opt->ext_peaks_index || pl->opt->ext_events_index) ? 1 : 0);
+		ri_read_sig(pl->fp, s, 1, ((pl->opt->ext_peaks || pl->opt->ext_events || pl->opt->ext_peaks_index || pl->opt->ext_events_index) && !pl->opt->ext_events_pos) ? 1 : 0);
 		size += s->l_sig;
 
 		if(size >= chunk_size) break;

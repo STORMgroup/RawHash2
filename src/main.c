@@ -91,6 +91,7 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"min-seg-length",		ko_required_argument, 	375 },
 	{ (char*)"max-seg-length",		ko_required_argument, 	376 },
 	{ (char*)"no-index-ext-data",	ko_no_argument,       	392 },
+	{ (char*)"events-pos-file",		ko_required_argument, 	393 },
 #ifndef NGRPCRH
 	{ (char*)"live",				ko_no_argument,       	377 },
 	{ (char*)"live-host",			ko_required_argument, 	378 },
@@ -352,7 +353,7 @@ int main(int argc, char *argv[])
   	ri_idxopt_t ipt;
 	int c, n_threads = 3, io_n_threads = 1;
 	// int n_parts;
-	char *fnw = 0, *fpore = 0, *fpeaks = 0, *fevents = 0, *fmoves = 0, *s;
+	char *fnw = 0, *fpore = 0, *fpeaks = 0, *fevents = 0, *fevents_pos = 0, *fmoves = 0, *s;
 	int load_ext_data_full = 0; // --no-index-ext-data: 1 = legacy full upfront load; 0 = indexed batch loading (default)
 	FILE *fp_help = stderr;
 	ri_idx_reader_t *idx_rdr;
@@ -514,6 +515,7 @@ int main(int argc, char *argv[])
 		else if (c == 371) {puts(RH_VERSION); return 0;}// --version
 		else if (c == 372) fpeaks = o.arg; // --peaks-file
 		else if (c == 373) fevents = o.arg; // --events-file
+		else if (c == 393) fevents_pos = o.arg; // --events-pos-file
 		else if (c == 374) fmoves = o.arg; // --moves-file
 		else if (c == 375) opt.min_segment_length = (uint32_t)atoi(o.arg); // --min-seg-length
 		else if (c == 376) opt.max_segment_length = (uint32_t)atoi(o.arg); // --max-seg-length
@@ -650,6 +652,7 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --events-file FILE  use pre-computed event values from FILE\n");
 		fprintf(fp_help, "                        Completely bypasses the event detection pipeline.\n");
 		fprintf(fp_help, "                        Format: read_id<TAB>ev1 ev2 ... evN\n");
+		fprintf(fp_help, "    --events-pos-file FILE  end sample position of each event in --events-file; maps them chunk by chunk\n");
 		fprintf(fp_help, "    --moves-file FILE   use dorado move table data from FILE\n");
 		fprintf(fp_help, "                        Converts move boundaries to segmentation peaks.\n");
 		fprintf(fp_help, "                        Format: read_id<TAB>mv:B:c,STRIDE,0,1,...<TAB>ts:i:OFFSET\n");
@@ -807,6 +810,19 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 	}
+	if (fevents_pos) {
+		if (!fevents) {
+			fprintf(stderr, "[ERROR] --events-pos-file requires --events-file\n");
+			ri_idx_reader_close(idx_rdr);
+			return 1;
+		}
+		opt.ext_events_pos = ri_load_ext_peaks(fevents_pos);
+		if (!opt.ext_events_pos) {
+			fprintf(stderr, "[ERROR] failed to load events position file '%s'\n", fevents_pos);
+			ri_idx_reader_close(idx_rdr);
+			return 1;
+		}
+	}
 	if (fmoves) {
 		if (load_ext_data_full) {
 			opt.ext_peaks = ri_load_ext_moves(fmoves);
@@ -857,6 +873,7 @@ int main(int argc, char *argv[])
 	/* Free legacy full-load hashes (will be NULL when using indexed batch path) */
 	if(opt.ext_peaks) ri_destroy_ext_peaks(opt.ext_peaks);
 	if(opt.ext_events) ri_destroy_ext_events(opt.ext_events);
+	if(opt.ext_events_pos) ri_destroy_ext_peaks(opt.ext_events_pos);
 	/* Free the offset indexes (which keep file handles open) */
 	if(opt.ext_peaks_index) ri_destroy_ext_peaks_index(opt.ext_peaks_index);
 	if(opt.ext_events_index) ri_destroy_ext_events_index(opt.ext_events_index);

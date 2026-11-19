@@ -168,6 +168,7 @@ typedef struct ri_mapopt_s{
 	void *ext_events;	// ri_ext_events_t* (full hash; NULL when using indexed batch path)
 	void *ext_peaks_index;	// ri_ext_peaks_index_t* (offset index; NULL when using full-load path)
 	void *ext_events_index;	// ri_ext_events_index_t* (offset index; NULL when using full-load path)
+	void *ext_events_pos;	// ri_ext_peaks_t*
 
 	//Debug output (NULL = disabled; set via --debug-read READID)
 	const char *debug_read;	// when non-NULL, print detailed diagnostics for this read
