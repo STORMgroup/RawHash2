@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "rextdata.h"
 #include "khash.h"
 #include <stdio.h>
@@ -11,10 +12,6 @@ KHASH_MAP_INIT_STR(ext_events, ri_ext_events_entry_t)
 /* Offset index: string read_id -> int64 byte offset into file.
  * ~92 bytes per read overhead vs the multi-KB-per-read cost of the full hash. */
 KHASH_MAP_INIT_STR(ext_offsets, int64_t)
-
-/* Maximum line length for external data files (1 MB).
- * A read with 10,000 peaks at ~7 chars each needs ~70 KB. */
-#define REXTDATA_LINE_BUF_SIZE (1024 * 1024)
 
 /* Format tag stored on the index handle so the per-batch loader knows whether
  * to apply the moves->peaks conversion. */
@@ -87,10 +84,11 @@ ri_ext_peaks_t *ri_load_ext_peaks(const char *fname)
 	if (!fp) return NULL;
 
 	khash_t(ext_peaks) *h = kh_init(ext_peaks);
-	char *line = (char*)malloc(REXTDATA_LINE_BUF_SIZE);
+	char *line = NULL;
+	size_t cap = 0;
 	uint32_t n_reads = 0;
 
-	while (fgets(line, REXTDATA_LINE_BUF_SIZE, fp)) {
+	while (getline(&line, &cap, fp) != -1) {
 		/* skip comments and empty lines */
 		if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
 
@@ -201,10 +199,11 @@ ri_ext_peaks_t *ri_load_ext_moves(const char *fname)
 	if (!fp) return NULL;
 
 	khash_t(ext_peaks) *h = kh_init(ext_peaks);
-	char *line = (char*)malloc(REXTDATA_LINE_BUF_SIZE);
+	char *line = NULL;
+	size_t cap = 0;
 	uint32_t n_reads = 0;
 
-	while (fgets(line, REXTDATA_LINE_BUF_SIZE, fp)) {
+	while (getline(&line, &cap, fp) != -1) {
 		if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
 		size_t len = strlen(line);
 		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
@@ -263,10 +262,11 @@ ri_ext_events_t *ri_load_ext_events(const char *fname)
 	if (!fp) return NULL;
 
 	khash_t(ext_events) *h = kh_init(ext_events);
-	char *line = (char*)malloc(REXTDATA_LINE_BUF_SIZE);
+	char *line = NULL;
+	size_t cap = 0;
 	uint32_t n_reads = 0;
 
-	while (fgets(line, REXTDATA_LINE_BUF_SIZE, fp)) {
+	while (getline(&line, &cap, fp) != -1) {
 		if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
 		size_t len = strlen(line);
 		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
@@ -343,11 +343,12 @@ static ri_ext_index_t *build_offset_index(const char *fname, ri_ext_format_t for
 	if (!fp) return NULL;
 
 	khash_t(ext_offsets) *offsets = kh_init(ext_offsets);
-	char *line = (char*)malloc(REXTDATA_LINE_BUF_SIZE);
+	char *line = NULL;
+	size_t cap = 0;
 	uint32_t n_reads = 0;
 
 	long off = ftell(fp);
-	while (fgets(line, REXTDATA_LINE_BUF_SIZE, fp)) {
+	while (getline(&line, &cap, fp) != -1) {
 		/* skip comments and empty lines */
 		if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') {
 			off = ftell(fp);
@@ -409,14 +410,14 @@ ri_ext_events_index_t *ri_index_ext_events(const char *fname)
 	return (ri_ext_events_index_t*)build_offset_index(fname, RI_EXT_FORMAT_EVENTS);
 }
 
-/* Read one line at the given byte offset into `line` (caller provides buffer).
+/* Read one line at the given byte offset into *line (grown as needed).
  * Returns 1 on success, 0 on read failure. Strips trailing CR/LF. */
-static int read_line_at_offset(FILE *fp, int64_t off, char *line)
+static int read_line_at_offset(FILE *fp, int64_t off, char **line, size_t *cap)
 {
 	if (fseek(fp, (long)off, SEEK_SET) != 0) return 0;
-	if (!fgets(line, REXTDATA_LINE_BUF_SIZE, fp)) return 0;
-	size_t len = strlen(line);
-	while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
+	if (getline(line, cap, fp) == -1) return 0;
+	size_t len = strlen(*line);
+	while (len > 0 && ((*line)[len-1] == '\n' || (*line)[len-1] == '\r')) (*line)[--len] = '\0';
 	return len > 0;
 }
 
@@ -430,7 +431,8 @@ ri_ext_peaks_t *ri_batch_load_ext_peaks(ri_ext_peaks_index_t *idx_v, char *const
 	}
 
 	khash_t(ext_peaks) *batch = kh_init(ext_peaks);
-	char *line = (char*)malloc(REXTDATA_LINE_BUF_SIZE);
+	char *line = NULL;
+	size_t cap = 0;
 
 	for (uint32_t i = 0; i < n_ids; i++) {
 		if (!read_ids[i]) continue;
@@ -438,7 +440,7 @@ ri_ext_peaks_t *ri_batch_load_ext_peaks(ri_ext_peaks_index_t *idx_v, char *const
 		if (k == kh_end(idx->offsets)) continue;  /* read not in file — silently skip */
 
 		int64_t off = kh_val(idx->offsets, k);
-		if (!read_line_at_offset(idx->fp, off, line)) continue;
+		if (!read_line_at_offset(idx->fp, off, &line, &cap)) continue;
 
 		if (idx->format == RI_EXT_FORMAT_PEAKS)
 			parse_peaks_line_into(batch, line);
@@ -460,7 +462,8 @@ ri_ext_events_t *ri_batch_load_ext_events(ri_ext_events_index_t *idx_v, char *co
 	}
 
 	khash_t(ext_events) *batch = kh_init(ext_events);
-	char *line = (char*)malloc(REXTDATA_LINE_BUF_SIZE);
+	char *line = NULL;
+	size_t cap = 0;
 
 	for (uint32_t i = 0; i < n_ids; i++) {
 		if (!read_ids[i]) continue;
@@ -468,7 +471,7 @@ ri_ext_events_t *ri_batch_load_ext_events(ri_ext_events_index_t *idx_v, char *co
 		if (k == kh_end(idx->offsets)) continue;
 
 		int64_t off = kh_val(idx->offsets, k);
-		if (!read_line_at_offset(idx->fp, off, line)) continue;
+		if (!read_line_at_offset(idx->fp, off, &line, &cap)) continue;
 
 		parse_events_line_into(batch, line);
 	}
